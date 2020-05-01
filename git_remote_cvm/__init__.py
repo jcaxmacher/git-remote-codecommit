@@ -15,6 +15,7 @@ import collections
 import datetime
 import os
 import subprocess
+import json
 import sys
 import re
 
@@ -25,6 +26,7 @@ import botocore.awsrequest
 import botocore.compat
 import botocore.hooks
 import botocore.session
+from botocore.credentials import ReadOnlyCredentials
 
 try:
   from urlparse import urlparse  # python 2.x
@@ -70,16 +72,9 @@ class Context(collections.namedtuple('Context', ['session', 'repository', 'versi
     Parses repository information from a git url, filling in additional
     attributes we need from our AWS profile.
 
-    Our remote helper accepts two distinct types of urls...
+    Our remote helper accepts one type of urls...
 
-    * codecommit://<profile>@<repository>
-    * codecommit::<region>://<profile>@<repository>
-
-    If provided the former we get the whole url, but if the later git will
-    truncate the proceeding 'codecommit::' prefix for us.
-
-    The '<profile>@' url is optional, using the aws sessions present profile
-    if not provided.
+    * cvm://<role>@<account_name>/<repository>
 
     :param str remote_url: git remote url to parse
 
@@ -95,60 +90,33 @@ class Context(collections.namedtuple('Context', ['session', 'repository', 'versi
     url = urlparse(remote_url)
     event_handler = botocore.hooks.HierarchicalEmitter()
     profile = 'default'
-    repository = url.netloc
-    if not url.scheme or not url.netloc:
-      raise FormatError('The following URL is malformed: {}. A URL must be in one of the two following formats: codecommit://<profile>@<repository> or codecommit::<region>://<profile>@<repository>'.format(remote_url))
 
-    if '@' in url.netloc:
-      profile, repository = url.netloc.split('@', 1)
-      session = botocore.session.Session(profile = profile, event_hooks = event_handler)
+    if not url.scheme or not url.netloc or not url.path or '@' not in url.netloc:
+      raise FormatError('The following URL is malformed: {}. A URL must be in the following format: cvm://<role>@<account_name>/<repository>'.format(remote_url))
 
-      if profile not in session.available_profiles:
-        raise ProfileNotFound('The following profile was not found: {}. Available profiles are: {}. Either use one of the available profiles, or create an AWS CLI profile to use and then try again. For more information, see Configure an AWS CLI Profile in the AWS CLI User Guide.'.format(profile, ', '.join(session.available_profiles)))
-    else:
-      session = botocore.session.Session(event_hooks = event_handler)
+    repository = url.path[1:]
+    role_name, account_name = url.netloc.split('@', 1)
 
-    session.get_component('credential_provider').get_provider('assume-role').cache = JSONFileCache()
+    session = botocore.session.Session(event_hooks = event_handler)
+    available_regions = [
+        region
+            for partition in session.get_available_partitions()
+            for region in session.get_available_regions('codecommit', partition)
+    ]
+    region = session.get_config_variable('region')
+    if not region or region not in available_regions:
+      raise RegionNotFound('Please set the AWS_DEFAULT_REGION environment variable to a valid AWS region.')
 
-    try:
-      # when the aws cli is available support plugin authentication
-
-      import awscli.plugin
-
-      awscli.plugin.load_plugins(
-          session.full_config.get('plugins', {}),
-          event_hooks = event_handler,
-          include_builtins = False,
-      )
-
-      session.emit_first_non_none_response('session-initialized', session = session)
-    except ImportError:
-      pass
-
-    available_regions = [region for partition in session.get_available_partitions() for region in session.get_available_regions('codecommit', partition)]
-
-    if url.scheme == 'codecommit':
-      region = session.get_config_variable('region')
-
-      if not region:
-        raise RegionNotFound('The following profile does not have an AWS Region: {}. You must set an AWS Region for this profile. For more information, see Configure An AWS CLI Profile in the AWS CLI User Guide.'.format(profile))
-
-      if region not in available_regions:
-        raise RegionNotAvailable('The following AWS Region is not available for use with AWS CodeCommit: {}. For more information about CodeCommit\'s availability in AWS Regions, see the AWS CodeCommit User Guide. If an AWS Region is listed as supported but you receive this error, try updating your version of the AWS CLI or the AWS SDKs.'.format(region))
-
-    elif re.match(r"^[a-z]{2}-\w*.*-\d{1}", url.scheme):
-      if url.scheme in available_regions:
-        region = url.scheme
-
-      else:
-        raise RegionNotAvailable('The following AWS Region is not available for use with AWS CodeCommit: {}. For more information about CodeCommit\'s availability in AWS Regions, see the AWS CodeCommit User Guide. If an AWS Region is listed as supported but you receive this error, try updating your version of the AWS CLI or the AWS SDKs.'.format(url.scheme))
-
-    else:
-      raise FormatError('The following URL is malformed: {}. A URL must be in one of the two following formats: codecommit://<profile>@<repository> or codecommit::<region>://<profile>@<repository>'.format(remote_url))
-    credentials = session.get_credentials()
-
-    if not credentials:
-      raise CredentialsNotFound('The following profile does not have credentials configured: {}. You must configure the access key and secret key for the profile. For more information, see Configure an AWS CLI Profile in the AWS CLI User Guide.'.format(profile))
+    r = subprocess.run(
+      f'cvm creds --account-name {account_name} --role-name {role_name}'.split(' '),
+      capture_output=True
+    )
+    data = json.loads(r.stdout.decode('utf-8'))
+    credentials = ReadOnlyCredentials(
+      data['Credentials']['AccessKeyId'],
+      data['Credentials']['SecretAccessKey'],
+      data['Credentials']['SessionToken']
+    )
 
     return Context(session, repository, 'v1', region, credentials)
 

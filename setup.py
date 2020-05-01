@@ -3,7 +3,7 @@
 import os
 import setuptools
 
-__version__ = '1.13'
+__version__ = '1.14'
 
 
 def read(fname):
@@ -11,18 +11,18 @@ def read(fname):
 
 
 setuptools.setup(
-    name = 'git-remote-codecommit',
-    packages = ['git_remote_codecommit'],
+    name = 'git-remote-cvm',
+    packages = ['git_remote_cvm'],
     version = __version__,
-    description = 'Git remote prefix to simplify pushing to and pulling from CodeCommit.',
+    description = 'Git remote prefix to simplify pushing to and pulling from CodeCommit using the CVM.',
     long_description = read('README.rst'),
-    author = 'Amazon Web Services',
-    url = 'https://github.com/awslabs/git-remote-codecommit',
+    author = 'Amazon Web Services and Jeremy Axmacher',
+    url = 'https://github.com/jcaxmacher/git-remote-cvm',
     license = 'Apache License 2.0',
     install_requires = ['botocore >= 1.10.4'],
     entry_points = {
         'console_scripts': [
-            'git-remote-codecommit = git_remote_codecommit:main',
+            'git-remote-cvm = git_remote_cvm:main',
         ],
     },
     classifiers = [
