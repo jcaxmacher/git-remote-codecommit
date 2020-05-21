@@ -109,7 +109,7 @@ class Context(collections.namedtuple('Context', ['session', 'repository', 'versi
 
     r = subprocess.run(
       f'cvm creds --account-name {account_name} --role-name {role_name}'.split(' '),
-      capture_output=True
+      stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     data = json.loads(r.stdout.decode('utf-8'))
     credentials = ReadOnlyCredentials(
